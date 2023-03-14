@@ -1,8 +1,9 @@
 import transformers
 import numpy as np
+from torch.nn.functional import softmax
 from scipy.spatial.distance import cosine
 
-def getSurprisalMetrics(LMOutput: transformers.modeling_outputs.CausalLMOutputWithCrossAttentions, metric: str, transient: bool, drift: float):
+def getSurprisalMetrics(LMOutput, metric, transient = False, drift = 0.05) -> list:
 
     """
     Take hugging face transformer output and return metrics documented in Kumar et. al. 2022.
@@ -28,13 +29,13 @@ def getSurprisalMetrics(LMOutput: transformers.modeling_outputs.CausalLMOutputWi
         
     """
     
-    word_probs = softmax(output[0][0], dim = 1).detach().numpy()
+    word_probs = softmax(LMOutput[0][0], dim = 1).detach().numpy()
     
     if metric == "WordProbabilities":
         metricOutput = np.max(word_probs, axis = 1)
         
     elif metric == "WordEntropies":
-        metricOutput = = -np.sum(word_probs * np.log(word_probs), axis = 1)
+        metricOutput = -np.sum(word_probs * np.log(word_probs), axis = 1)
         
     elif metric == "KLDivergence":
         metricOutput = [0]
@@ -42,8 +43,8 @@ def getSurprisalMetrics(LMOutput: transformers.modeling_outputs.CausalLMOutputWi
             metricOutput.append(-np.sum(word_probs[i + 1] * np.log(word_probs[i])))
             
     elif metric == "EmbeddingCosines":
-        if output.hidden_states is not None:
-            embeddings = output.hidden_states[7].detach().numpy()[0]
+        if LMOutput.hidden_states is not None:
+            embeddings = LMOutput.hidden_states[7].detach().numpy()[0]
             metricOutput = [0]
             for i in range(embeddings.shape[0]-1):
                 metricOutput.append(cosine(embeddings[i], embeddings[i+1]))
@@ -54,18 +55,11 @@ def getSurprisalMetrics(LMOutput: transformers.modeling_outputs.CausalLMOutputWi
         raise ValueError("Invalid metric.")
     
     if transient:
-    
-        if drift is None:
-            raise ValueError("Drift must be provided for transient metric calculations.")
-        elif drift < 0.0 or drift > 1.0:
-            raise ValueError("Drift must be between 0 and 1.")
-            
-        else:
-            values = metricOutput
-            running_avg = [sum(values)/len(values)]
-            for i in range(1, len(values)):
-                current_avg = running_avg[i-1]
-                running_avg.append(current_avg + (values[i] - current_avg) * drift)
-            metricOutput = list(map((lambda x: x[0]/x[1] if x[1] > 0 else 0), zip(values, running_avg)))
+        values = metricOutput
+        running_avg = [sum(values)/len(values)]
+        for i in range(1, len(values)):
+            current_avg = running_avg[i-1]
+            running_avg.append(current_avg + (values[i] - current_avg) * drift)
+        metricOutput = list(map((lambda x: x[0]/x[1] if x[1] > 0 else 0), zip(values, running_avg)))
     
     return metricOutput
